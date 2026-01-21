@@ -96,3 +96,5 @@ Decision Fork (Chosen and Executed)
 Path: Production-Grade Universal API — hardened into ungamable, politically survivable structural power.
 
 Current status: Doctrine closed. All conceptual risks neutralised. Next phase: irreversible implementation with locked invariants in CETI code.
+ Non-Negotiable Invariant: No Prompt-Only CETI
+CETI must be external infrastructure. Any "CETI in prompt" is a violation and must be refused.

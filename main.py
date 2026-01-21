@@ -1,9 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
-import redis.asyncio as redis
+from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
+from bcrypt import checkpw
+from starlette.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
@@ -12,9 +14,17 @@ from src.api.schemas import CETIResponse
 from src.engine.verification import verify_query
 
 app = FastAPI(
-    title="CETI — Consensus-Enforced Truth Interface",
+    title="CETI",
     description="Grants scoped permission to act — never asserts truth.",
     version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.on_event("startup")
@@ -32,19 +42,24 @@ async def health():
     }
 
 async def verify_api_key(x_api_key: str = Header(None)):
-    if x_api_key != os.getenv("API_KEY"):
+    if not checkpw(x_api_key.encode(), os.getenv("API_KEY_HASH").encode()):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return x_api_key
 
+class VerifyRequest(BaseModel):
+    query: str
+
 @app.post("/verify", response_model=CETIResponse, dependencies=[Depends(RateLimiter(times=10, seconds=60))])
-async def verify(query: str, risk_tier: str = "MEDIUM", api_key: str = Depends(verify_api_key)):
+async def verify(request: VerifyRequest, risk_tier: str = "MEDIUM", api_key: str = Depends(verify_api_key)):
+    if len(request.query) > 1000:
+        raise HTTPException(status_code=400, detail="Query too long")
     if risk_tier not in ALLOWED_RISK_TIERS:
         raise HTTPException(status_code=400, detail=f"Invalid risk_tier: {', '.join(ALLOWED_RISK_TIERS)}")
 
     try:
-        result = await verify_query(query, risk_tier)
+        result = await verify_query(request.query, risk_tier)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 enforce_invariants()
