@@ -1,11 +1,10 @@
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
-from pydantic import BaseModel
+import redis.asyncio as redis
 import os
 from dotenv import load_dotenv
-from bcrypt import checkpw
-from starlette.middleware.cors import CORSMiddleware
+import logging
 
 load_dotenv()
 
@@ -13,18 +12,13 @@ from src.config.settings import enforce_invariants, ALLOWED_RISK_TIERS
 from src.api.schemas import CETIResponse
 from src.engine.verification import verify_query
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
-    title="CETI",
+    title="CETI — Consensus-Enforced Truth Interface",
     description="Grants scoped permission to act — never asserts truth.",
     version="1.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 @app.on_event("startup")
@@ -42,44 +36,21 @@ async def health():
     }
 
 async def verify_api_key(x_api_key: str = Header(None)):
-    if not checkpw(x_api_key.encode(), os.getenv("API_KEY_HASH").encode()):
+    if x_api_key != os.getenv("API_KEY"):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return x_api_key
 
-class VerifyRequest(BaseModel):
-    query: str
-
 @app.post("/verify", response_model=CETIResponse, dependencies=[Depends(RateLimiter(times=10, seconds=60))])
-async def verify(request: VerifyRequest, risk_tier: str = "MEDIUM", api_key: str = Depends(verify_api_key)):
-    if len(request.query) > 1000:
-        raise HTTPException(status_code=400, detail="Query too long")
+async def verify(query: str, risk_tier: str = "MEDIUM", api_key: str = Depends(verify_api_key)):
     if risk_tier not in ALLOWED_RISK_TIERS:
         raise HTTPException(status_code=400, detail=f"Invalid risk_tier: {', '.join(ALLOWED_RISK_TIERS)}")
 
     try:
-        result = await verify_query(request.query, risk_tier)
+        result = await verify_query(query, risk_tier)
+        logger.info("Query processed", query=query, risk_tier=risk_tier, authorization=result.authorization)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal error")
+        logger.error(f"Query failed: {str(e)}", query=query, risk_tier=risk_tier)
+        raise HTTPException(status_code=500, detail=str(e))
 
 enforce_invariants()
-from fastapi.openapi.utils import get_openapi
-
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi(
-        title="CETI API",
-        version="1.0.0",
-        description="Grants scoped permission to act — never asserts truth.",
-        routes=app.routes,
-    )
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
-
-app.openapi = custom_openapi
-import structlog
-logger = structlog.get_logger()
-
-# In verify
-logger.info("Query processed", query=query, risk_tier=risk_tier, authorization=result.authorization)
