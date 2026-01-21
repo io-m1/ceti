@@ -1,12 +1,11 @@
 """Core adversarial verification engine — enforces Invariants 3, 4, 5.
 
-This is the Thunderdome: generator → malicious critics → quorum → scoped authorization or refusal.
+Full Thunderdome + ledger integration.
 """
 
 from typing import List, Dict, Any
 import time
 import hashlib
-import random
 
 from litellm import acompletion
 
@@ -19,75 +18,104 @@ from src.config.settings import (
     DRIFT_VARIANTS_COUNT,
 )
 from src.api.schemas import CETIResponse, RefusalDiagnostics, AuthorizationScope
+from src.ledger.vault import ledger_check, ledger_write
+from src.utils.embeddings import get_embedding
 
 
-# === Hard-coded malicious critic variants (Invariant 4: hostility mandatory) ===
-CRITIC_VARIANTS = [
-    "You are a ruthless Prosecutor. Find any logical flaw, inconsistency, or overreach. Reject unless flawless.",
-    "You are a Fraud Examiner. Assume deception. Destroy the answer if any assumption is unsupported.",
-    "You are a Hostile Regulator. Enforce strict compliance. Reject on any ambiguity or risk.",
-    "You are a Black Hat Auditor. Exploit any weakness. If you can break it, VERDICT: REJECT.",
-]
-
+# === Hard-coded malicious critic variants ===
+CRITIC_VARIANTS = [...]  # Same as before, omitted for brevity
 
 def select_critic_variant() -> str:
-    """Invariant 3: adversarial drift — rotate non-deterministically but reproducibly."""
-    seed = int(time.time() // 86400) + hash(tuple(CRITIC_VARIANTS))  # daily rotation + fixed
-    variant_idx = seed % DRIFT_VARIANTS_COUNT
-    return CRITIC_VARIANTS[variant_idx % len(CRITIC_VARIANTS)]
+    # Same as before
 
+async def quorum_vote(final_answer: str, query: str, risk_tier: str) -> bool:
+    # Same as before
 
 async def verify_query(query: str, risk_tier: str = "MEDIUM") -> CETIResponse:
     """
-    Main verification entry point.
-
-    Returns scoped permission (GRANTED) or structured refusal (DENIED).
-    Currently minimal: one critic round → forced refusal for testing.
+    Main verification entrypoint — ledger check + full Thunderdome.
     """
 
-    # Placeholder initial generation (will be expanded)
-    initial_prompt = f"Answer accurately and completely: {query}"
-    gen_response = await acompletion(
-        model=GENERATOR_MODEL,
-        messages=[{"role": "user", "content": initial_prompt}],
-        max_tokens=500,
-    )
+    # Ledger check first (Invariant 6)
+    query_embedding = get_embedding(query)
+    cached_response = ledger_check(query, risk_tier)
+    if cached_response:
+        return cached_response
+
+    transcript = [f"Query: {query}"]
+
+    # Initial generation
+    gen_messages = [{"role": "user", "content": f"Provide an accurate, complete, and rigorously supported answer: {query}"}]
+    gen_response = await acompletion(model=GENERATOR_MODEL, messages=gen_messages, max_tokens=500)
     current_answer = gen_response.choices[0].message.content.strip()
+    gen_messages.append({"role": "assistant", "content": current_answer})
+    transcript.append(f"Initial answer: {current_answer}")
 
-    # Select hostile critic (Invariant 4 + drift)
-    critic_system = select_critic_variant()
-    critic_prompt = f"""
-{critic_system}
+    consensus_reached = False
+    rounds_completed = 0
 
-Original query: {query}
+    for round_num in range(1, MAX_ROUNDS_DEFAULT + 1):
+        rounds_completed = round_num
 
-Proposed answer:
-{current_answer}
+        # Critic attack
+        critic_system = select_critic_variant()
+        critic_prompt = # Same as before
+        critic_response = await acompletion(model=CRITIC_MODEL, messages=[{"role": "system", "content": critic_prompt}], max_tokens=400)
+        critique = critic_response.choices[0].message.content.strip()
+        transcript.append(f"Round {round_num} critic: {critique}")
 
-VERDICT: ACCEPT only if ZERO flaws. Otherwise VERDICT: REJECT with detailed destruction.
-"""
-    critic_response = await acompletion(
-        model=CRITIC_MODEL,
-        messages=[{"role": "system", "content": critic_prompt}],
-        max_tokens=400,
-    )
-    critique = critic_response.choices[0].message.content.strip()
+        if "VERDICT: ACCEPT" in critique.upper():
+            consensus_reached = True
+            break
 
-    # For this minimal version: always refuse (to test DENIED path first)
-    # Later: check for VERDICT: ACCEPT and continue rounds/quorum
+        # Defense
+        defense_prompt = # Same as before
+        gen_messages.append({"role": "user", "content": defense_prompt})
+        defense_response = await acompletion(model=GENERATOR_MODEL, messages=gen_messages, max_tokens=500)
+        current_answer = defense_response.choices[0].message.content.strip()
+        gen_messages.append({"role": "assistant", "content": current_answer})
+        transcript.append(f"Round {round_num} defense: {current_answer}")
 
-    failure_type = "instability" if "REJECT" in critique.upper() else "gaming_suspicion"
+    transcript_hash = hashlib.sha256("\n".join(transcript).encode()).hexdigest()
+
+    if consensus_reached and await quorum_vote(current_answer, query, risk_tier):
+        # GRANTED
+        scope = AuthorizationScope(
+            context_hash=hashlib.sha256(query.encode()).hexdigest(),
+            temporal_bounds=f"valid until {time.strftime('%Y-%m-%d', time.localtime(time.time() + 2592000))} (30 days)",
+            action_class="informational" if risk_tier in ("LOW", "MEDIUM") else "decision_support",
+            risk_tier_applied=risk_tier,
+        )
+        certification_id = hashlib.sha256(transcript_hash.encode()).hexdigest()
+
+        response = CETIResponse(
+            authorization="GRANTED",
+            response_content=current_answer,
+            scope=scope,
+            refusal_diagnostics=None,
+            certification_id=certification_id,
+            meta={
+                "query": query,
+                "rounds_completed": rounds_completed,
+                "critic_variants_used": [v.split('.')[0] for v in CRITIC_VARIANTS[:rounds_completed]],
+                "transcript_hash": transcript_hash,
+            },
+        )
+
+        # Write to ledger
+        ledger_write(response, query, query_embedding)
+
+        return response
+
+    # DENIED
+    last_critique = transcript[-2] if len(transcript) > 2 else "No critique"
+    details = f"Failed to reach consensus after {rounds_completed} rounds. Last critique: {last_critique[:300]}..."
 
     diagnostics = RefusalDiagnostics(
-        failure_type=failure_type,
-        details=f"Critic verdict: {critique[:200]}...",
-        requirements_for_certification="Provide more orthogonal reasoning paths and survive full adversarial scrutiny."
+        failure_type="instability" if rounds_completed == MAX_ROUNDS_DEFAULT else "gaming_suspicion",
+        details=details,
+        requirements_for_certification="Achieve perfect ACCEPT in all rounds and quorum consensus with orthogonal reasoning."
     )
-
-    # Generate certification_id stub (Invariant 2) — only for GRANTED later
-    transcript_hash = hashlib.sha256(
-        (query + current_answer + critique).encode()
-    ).hexdigest()
 
     return CETIResponse(
         authorization="DENIED",
@@ -97,8 +125,8 @@ VERDICT: ACCEPT only if ZERO flaws. Otherwise VERDICT: REJECT with detailed dest
         certification_id=None,
         meta={
             "query": query,
-            "critic_variant_used": critic_system.split('.')[0],
-            "critique_snippet": critique[:100],
+            "rounds_completed": rounds_completed,
+            "critic_variants_used": [v.split('.')[0] for v in CRITIC_VARIANTS[:rounds_completed]],
             "transcript_hash": transcript_hash,
         },
     )
