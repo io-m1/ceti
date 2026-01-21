@@ -1,13 +1,10 @@
-"""Central configuration and invariant enforcement for CETI.
-
-All tunable values come from environment variables with sane defaults.
-Invariants are hard-coded and asserted at runtime — they cannot be overridden.
-"""
-
 import os
-from typing import List, Literal
+from typing import List, Literal, Tuple
 
-# === Environment variable loading with defaults ===
+# ────────────────────────────────────────────────
+# CETI Central Configuration & Invariants
+# ────────────────────────────────────────────────
+
 GENERATOR_MODEL: str = os.getenv("GENERATOR_MODEL", "groq/llama-3.3-70b-versatile")
 CRITIC_MODEL: str = os.getenv("CRITIC_MODEL", "groq/llama-3.1-8b-instant")
 JUDGE_MODELS: List[str] = os.getenv(
@@ -19,35 +16,40 @@ MAX_ROUNDS_DEFAULT: int = int(os.getenv("MAX_ROUNDS", "5"))
 SIMILARITY_THRESHOLD: float = float(os.getenv("SIMILARITY_THRESHOLD", "0.92"))
 CHROMA_PATH: str = os.getenv("CHROMA_PATH", "./chroma_db")
 
-# === Hard invariants (non-overridable) ===
-MIN_ADVERSARIAL_ROUNDS: int = 3                  # Invariant 1 & 4: refusal bias
-MIN_QUORUM_SIZE: int = 3                         # Invariant 3: no single judge
-MIN_MECHANICAL_ORTHOGONALITY_WEIGHT: float = 0.4 # Invariant 6: >=40% mechanical
-DRIFT_VARIANTS_COUNT: int = 8                    # Invariant 3: rotation depth
+# Hard invariants (crash if violated)
+MIN_ADVERSARIAL_ROUNDS: int = 3
+MIN_QUORUM_SIZE: int = 3
+MIN_MECHANICAL_ORTHOGONALITY_WEIGHT: float = 0.4
+DRIFT_VARIANTS_COUNT: int = 8
 
-ALLOWED_RISK_TIERS: tuple[Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"], ...] = (
+ALLOWED_RISK_TIERS: Tuple[Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"], ...] = (
     "LOW", "MEDIUM", "HIGH", "CRITICAL"
 )
 
-# === Runtime invariant checks (crash on violation) ===
+# Optional model validation set
+SUPPORTED_MODELS = {
+    "groq/llama-3.3-70b-versatile",
+    "groq/llama-3.1-8b-instant",
+    "groq/mixtral-8x22b-2404",
+    "groq/gemma2-27b-it"
+}
+
 def enforce_invariants() -> None:
-    """Called on startup — fails fast if invariants are broken."""
+    """Fail-fast on startup if invariants are broken."""
     if MAX_ROUNDS_DEFAULT < MIN_ADVERSARIAL_ROUNDS:
-        raise AssertionError(
-            f"MAX_ROUNDS must be >= {MIN_ADVERSARIAL_ROUNDS} (invariant 1 & 4)"
-        )
+        raise AssertionError(f"MAX_ROUNDS must be >= {MIN_ADVERSARIAL_ROUNDS}")
 
     if len(JUDGE_MODELS) < MIN_QUORUM_SIZE:
-        raise AssertionError(
-            f"At least {MIN_QUORUM_SIZE} diverse judge models required (invariant 3)"
-        )
+        raise AssertionError(f"At least {MIN_QUORUM_SIZE} judge models required")
 
     if MIN_MECHANICAL_ORTHOGONALITY_WEIGHT < 0.4:
-        raise AssertionError(
-            "Mechanical orthogonality weight must be >= 0.4 (invariant 6)"
-        )
+        raise AssertionError("Mechanical orthogonality weight must be >= 0.4")
+
+    for m in [GENERATOR_MODEL, CRITIC_MODEL] + JUDGE_MODELS:
+        if m not in SUPPORTED_MODELS:
+            raise AssertionError(f"Unsupported model: {m}")
 
     print("CETI invariants enforced successfully.")
 
-# Execute checks immediately on module import (startup validation)
+# Run checks immediately
 enforce_invariants()
