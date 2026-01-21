@@ -5,3 +5,6 @@ chroma_db/
 .coverage
 .coverage
 .coverage
+.venv
+.mypy_cache
+.pytest_cache
