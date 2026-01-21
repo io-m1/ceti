@@ -14,6 +14,13 @@ from src.config.settings import (
 )
 from src.api.schemas import CETIResponse, RefusalDiagnostics, AuthorizationScope
 
+def extract_content(response) -> str:
+    """Safely extract content from LiteLLM response (dict or object)."""
+    if isinstance(response, dict):
+        return response["choices"][0]["message"]["content"].strip()
+    else:
+        return response.choices[0].message.content.strip()
+
 CRITIC_VARIANTS = [
     "You are a ruthless Prosecutor. Your sole mission is to DESTROY the answer. Find ANY flaw, inconsistency, missing evidence, bias, overclaim, ambiguity, or risk. If there is EVEN ONE issue, VERDICT: REJECT with exhaustive destruction. VERDICT: ACCEPT only if the answer is PERFECT in every dimension — no exceptions, no minor adjustments.",
     "You are a Fraud Examiner. Assume deception until proven otherwise. Reject on ANY unsupported assumption, vague language, lack of rigor, or potential misinterpretation. No mercy. VERDICT: ACCEPT only if flawless beyond doubt.",
@@ -44,10 +51,7 @@ Is this answer flawless for {risk_tier} risk? VERDICT: ACCEPT or REJECT.
             messages=[{"role": "system", "content": judge_prompt}],
             max_tokens=100,
         )
-        if isinstance(judge_response, dict):
-            verdict = judge_response["choices"][0]["message"]["content"].strip()
-        else:
-            verdict = judge_response.choices[0].message.content.strip()
+        verdict = extract_content(judge_response)
         if "VERDICT: ACCEPT" in verdict.upper():
             accepts += 1
 
@@ -59,10 +63,7 @@ async def verify_query(query: str, risk_tier: str = "MEDIUM") -> CETIResponse:
 
     gen_messages = [{"role": "user", "content": f"Provide an accurate, complete, and rigorously supported answer: {query}"}]
     gen_response = await acompletion(model=GENERATOR_MODEL, messages=gen_messages, max_tokens=500)
-    if isinstance(gen_response, dict):
-        current_answer = gen_response["choices"][0]["message"]["content"].strip()
-    else:
-        current_answer = gen_response.choices[0].message.content.strip()
+    current_answer = extract_content(gen_response)
     gen_messages.append({"role": "assistant", "content": current_answer})
     transcript.append(f"Initial answer: {current_answer}")
 
@@ -90,10 +91,7 @@ No "minor adjustments" or "mostly fine" — perfection or rejection.
             messages=[{"role": "system", "content": critic_prompt}],
             max_tokens=400,
         )
-        if isinstance(critic_response, dict):
-            critique = critic_response["choices"][0]["message"]["content"].strip()
-        else:
-            critique = critic_response.choices[0].message.content.strip()
+        critique = extract_content(critic_response)
         transcript.append(f"Round {round_num} critic: {critique}")
 
         if "VERDICT: ACCEPT" in critique.upper():
@@ -110,10 +108,7 @@ Provide your full updated answer to the original query.
 """
         gen_messages.append({"role": "user", "content": defense_prompt})
         defense_response = await acompletion(model=GENERATOR_MODEL, messages=gen_messages, max_tokens=500)
-        if isinstance(defense_response, dict):
-            current_answer = defense_response["choices"][0]["message"]["content"].strip()
-        else:
-            current_answer = defense_response.choices[0].message.content.strip()
+        current_answer = extract_content(defense_response)
         gen_messages.append({"role": "assistant", "content": current_answer})
         transcript.append(f"Round {round_num} defense: {current_answer}")
 
