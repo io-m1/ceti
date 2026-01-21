@@ -1,40 +1,37 @@
-import chromadb
-from chromadb.utils import embedding_functions
-from sentence_transformers import SentenceTransformer
 import hashlib
+import json
+from pathlib import Path
+from datetime import datetime
 
-# Persistent Chroma client (new API, no deprecated Settings)
-client = chromadb.PersistentClient(path="./chroma_db")
+LEDGER_FILE = Path("ledger.jsonl")
+LEDGER_FILE.touch(exist_ok=True)
 
-# Use the same embedding model as before
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+def ledger_write(ceti_request: dict, ceti_response: dict) -> dict:
+    """
+    Write the request and response to ledger, including SHA256 transcript hash.
+    """
+    timestamp = datetime.utcnow().isoformat() + "Z"
+    entry = {
+        "timestamp": timestamp,
+        "request": ceti_request,
+        "response": ceti_response
+    }
+    serialized = json.dumps(entry, sort_keys=True)
+    transcript_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    entry["transcript_hash"] = transcript_hash
 
-def get_embedding(text: str) -> list:
-    return embedding_model.encode(text).tolist()
+    with LEDGER_FILE.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+    
+    return {"ledger_entry": entry, "transcript_hash": transcript_hash}
 
-# Get or create collection
-collection = client.get_or_create_collection(
-    name="ceti_decisions",
-    embedding_function=embedding_functions.SentenceTransformerEmbeddingFunction(model_name='all-MiniLM-L6-v2')
-)
-
-def ledger_check(query: str, risk_tier: str) -> dict | None:
-    query_embedding = get_embedding(query)
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=1,
-        where={"risk_tier": risk_tier},
-        include=["metadatas", "distances"]
-    )
-    if results['distances'][0] and results['distances'][0][0] < 0.15:  # similarity threshold
-        return results['metadatas'][0][0]
+def ledger_check(transcript_hash: str) -> dict | None:
+    """
+    Check if a transcript hash exists in the ledger.
+    """
+    with LEDGER_FILE.open("r") as f:
+        for line in f:
+            entry = json.loads(line)
+            if entry.get("transcript_hash") == transcript_hash:
+                return entry
     return None
-
-def ledger_write(response: dict, query: str, embedding: list):
-    doc_id = hashlib.sha256(query.encode()).hexdigest()
-    collection.upsert(
-        ids=[doc_id],
-        embeddings=[embedding],
-        metadatas=[response],
-        documents=[response.get("response_content", "")]
-    )

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CETI // TERMINAL</title>
+<style>
+:root {
+    --bg-color: #050505;
+    --terminal-green: #00ff41;
+    --dim-green: #008f11;
+    --alert-red: #ff3333;
+    --font-stack: 'Courier New', Courier, monospace;
+}
+body { background-color: var(--bg-color); color: var(--terminal-green); font-family: var(--font-stack); margin: 0; padding: 20px; font-size:14px; overflow-x:hidden; }
+#container { max-width: 900px; margin:0 auto; }
+.header { border-bottom:2px solid var(--terminal-green); padding-bottom:10px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:flex-end; }
+.logo { font-size:24px; font-weight:bold; letter-spacing:2px; }
+.status { font-size:12px; color: var(--dim-green); }
+#config-panel { border:1px solid var(--dim-green); padding:10px; margin-bottom:20px; display:flex; gap:10px; flex-wrap:wrap; }
+input { background:#111; border:1px solid var(--dim-green); color:var(--terminal-green); padding:8px; font-family:var(--font-stack); width:250px; }
+button { background:var(--dim-green); color:#000; border:none; padding:8px 16px; font-weight:bold; cursor:pointer; font-family:var(--font-stack); }
+button:hover { background: var(--terminal-green); }
+#feed { min-height:400px; margin-bottom:20px; }
+.entry { margin-bottom:15px; line-height:1.5; border-left:2px solid #333; padding-left:10px; opacity:0; animation:fadeIn 0.3s forwards; }
+@keyframes fadeIn { to { opacity:1; } }
+.role { font-weight:bold; opacity:0.7; }
+.role.SYSTEM { color:#888; }
+.role.GENERATOR { color:#00ccff; }
+.role.CRITIC { color:var(--alert-red); }
+.role.DEFENDER { color:#00ccff; }
+.role.VERDICT { color:#ffff00; font-weight:900; }
+#input-zone { position:sticky; bottom:20px; background:var(--bg-color); padding-top:10px; border-top:1px solid #333; display:flex; gap:10px; }
+#query-input { width:100%; outline:none; border:1px solid var(--terminal-green); }
+.cursor::after { content:'█'; animation: blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity:0; } }
+pre { white-space: pre-wrap; margin:0; }
+</style>
+</head>
+<body>
+
+<div id="container">
+    <div class="header">
+        <div class="logo">CETI // CONSENSUS ENGINE</div>
+        <div class="status" id="connection-status">STATUS: STANDBY</div>
+    </div>
+
+    <div id="config-panel">
+        <input type="text" id="api-url" placeholder="API URL (e.g., https://your-app.onrender.com)">
+        <input type="password" id="api-key" placeholder="MASTER KEY">
+        <button onclick="saveConfig()">INITIALIZE LINK</button>
+    </div>
+
+    <div id="feed">
+        <div class="entry"><span class="role">SYSTEM</span> :: WAITING FOR TARGET QUERY...</div>
+    </div>
+
+    <div id="input-zone">
+        <span style="padding-top:8px;">></span>
+        <input type="text" id="query-input" placeholder="Enter query for verification..." onkeypress="handleKey(event)">
+        <button onclick="runVerification()">VERIFY</button>
+    </div>
+</div>
+
+<script>
+document.getElementById('api-url').value = localStorage.getItem('ceti_url') || '';
+document.getElementById('api-key').value = localStorage.getItem('ceti_key') || '';
+
+function saveConfig() {
+    const url = document.getElementById('api-url').value.replace(/\/$/, "");
+    const key = document.getElementById('api-key').value;
+    localStorage.setItem('ceti_url', url);
+    localStorage.setItem('ceti_key', key);
+    log("SYSTEM", "UPLINK CONFIGURED. READY.");
+    document.getElementById('connection-status').innerText = "STATUS: ARMED";
+}
+
+function log(role, text) {
+    const feed = document.getElementById('feed');
+    const div = document.createElement('div');
+    div.className = 'entry';
+    div.innerHTML = `<span class="role ${role}">${role}</span> :: <pre style="display:inline">${text}</pre>`;
+    feed.appendChild(div);
+    window.scrollTo(0, document.body.scrollHeight);
+}
+
+function handleKey(e) { if(e.key==='Enter') runVerification(); }
+
+async function runVerification() {
+    const query = document.getElementById('query-input').value;
+    const url = localStorage.getItem('ceti_url');
+    const key = localStorage.getItem('ceti_key');
+
+    if(!query || !url || !key) { log("SYSTEM","ERROR: MISSING CONFIG OR QUERY."); return; }
+
+    document.getElementById('query-input').value='';
+    log("SYSTEM", `INITIATING CETI PROTOCOL FOR: "${query}"`);
+    document.getElementById('connection-status').innerText = "STATUS: PROCESSING";
+
+    try {
+        // Convert plain text to CETI JSON
+        const payload = {
+            query: query,
+            risk_tier: "MEDIUM"
+        };
+
+        const response = await fetch(`${url}/verify`, {
+            method: 'POST',
+            headers: {
+                'Content-Type':'application/json',
+                'Authorization': `Bearer ${key}`
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if(!response.ok) { throw new Error(`API ERROR: ${response.status}`); }
+
+        const data = await response.json();
+
+        log("SYSTEM", `ITERATIONS: ${data.meta.iterations} | SURVIVABILITY: ${data.meta.adversarial_survivability}`);
+        log("VERDICT", data.response);
+        log("SYSTEM", `FINAL CET_SCORE: ${data.meta.cet_score}`);
+        document.getElementById('connection-status').innerText = "STATUS: COMPLETE";
+
+    } catch(e) {
+        log("CRITIC", `CONNECTION FAILED: ${e.message}`);
+        document.getElementById('connection-status').innerText = "STATUS: ERROR";
+    }
+}
+</script>
+
+</body>
+</html>
