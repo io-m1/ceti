@@ -44,7 +44,10 @@ Is this answer flawless for {risk_tier} risk? VERDICT: ACCEPT or REJECT.
             messages=[{"role": "system", "content": judge_prompt}],
             max_tokens=100,
         )
-        verdict = judge_response.choices[0].message.content.strip()
+        if isinstance(judge_response, dict):
+            verdict = judge_response["choices"][0]["message"]["content"].strip()
+        else:
+            verdict = judge_response.choices[0].message.content.strip()
         if "VERDICT: ACCEPT" in verdict.upper():
             accepts += 1
 
@@ -56,7 +59,10 @@ async def verify_query(query: str, risk_tier: str = "MEDIUM") -> CETIResponse:
 
     gen_messages = [{"role": "user", "content": f"Provide an accurate, complete, and rigorously supported answer: {query}"}]
     gen_response = await acompletion(model=GENERATOR_MODEL, messages=gen_messages, max_tokens=500)
-    current_answer = gen_response.choices[0].message.content.strip()
+    if isinstance(gen_response, dict):
+        current_answer = gen_response["choices"][0]["message"]["content"].strip()
+    else:
+        current_answer = gen_response.choices[0].message.content.strip()
     gen_messages.append({"role": "assistant", "content": current_answer})
     transcript.append(f"Initial answer: {current_answer}")
 
@@ -84,7 +90,10 @@ No "minor adjustments" or "mostly fine" — perfection or rejection.
             messages=[{"role": "system", "content": critic_prompt}],
             max_tokens=400,
         )
-        critique = critic_response.choices[0].message.content.strip()
+        if isinstance(critic_response, dict):
+            critique = critic_response["choices"][0]["message"]["content"].strip()
+        else:
+            critique = critic_response.choices[0].message.content.strip()
         transcript.append(f"Round {round_num} critic: {critique}")
 
         if "VERDICT: ACCEPT" in critique.upper():
@@ -101,7 +110,10 @@ Provide your full updated answer to the original query.
 """
         gen_messages.append({"role": "user", "content": defense_prompt})
         defense_response = await acompletion(model=GENERATOR_MODEL, messages=gen_messages, max_tokens=500)
-        current_answer = defense_response.choices[0].message.content.strip()
+        if isinstance(defense_response, dict):
+            current_answer = defense_response["choices"][0]["message"]["content"].strip()
+        else:
+            current_answer = defense_response.choices[0].message.content.strip()
         gen_messages.append({"role": "assistant", "content": current_answer})
         transcript.append(f"Round {round_num} defense: {current_answer}")
 
