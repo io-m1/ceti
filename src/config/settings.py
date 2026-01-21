@@ -8,11 +8,11 @@ import os
 from typing import List, Literal
 
 # === Environment variable loading with defaults ===
-GENERATOR_MODEL: str = os.getenv("GENERATOR_MODEL", "groq/llama-3.1-70b-versatile")
+GENERATOR_MODEL: str = os.getenv("GENERATOR_MODEL", "groq/llama-3.3-70b-versatile")
 CRITIC_MODEL: str = os.getenv("CRITIC_MODEL", "groq/llama-3.1-8b-instant")
 JUDGE_MODELS: List[str] = os.getenv(
     "JUDGE_MODELS",
-    "groq/llama-3.1-70b-versatile,groq/mixtral-8x7b-32768,anthropic/claude-3-haiku-20240307"
+    "groq/llama-3.3-70b-versatile,groq/mixtral-8x22b-2404,groq/gemma2-27b-it"
 ).split(",")
 
 MAX_ROUNDS_DEFAULT: int = int(os.getenv("MAX_ROUNDS", "5"))
