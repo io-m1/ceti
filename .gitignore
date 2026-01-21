@@ -1,13 +1,23 @@
-__pycache__
-*.pyc
-.env
-chroma_db/
-.coverage
-.coverage
-.coverage
-.venv
-.mypy_cache
-.pytest_cache
+# Python
 __pycache__/
 *.pyc
-.env
+*.pyo
+*.pyd
+env/
+venv/
+*.sqlite3
+
+# Node / Frontend
+node_modules/
+dist/
+.next/
+*.log
+package-lock.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.env
+*.egg-info/
