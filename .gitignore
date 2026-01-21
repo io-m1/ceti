@@ -10,3 +10,4 @@ chroma_db/
 .pytest_cache
 __pycache__/
 *.pyc
+.env
