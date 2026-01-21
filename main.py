@@ -63,3 +63,23 @@ async def verify(request: VerifyRequest, risk_tier: str = "MEDIUM", api_key: str
         raise HTTPException(status_code=500, detail="Internal error")
 
 enforce_invariants()
+from fastapi.openapi.utils import get_openapi
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title="CETI API",
+        version="1.0.0",
+        description="Grants scoped permission to act — never asserts truth.",
+        routes=app.routes,
+    )
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+import structlog
+logger = structlog.get_logger()
+
+# In verify
+logger.info("Query processed", query=query, risk_tier=risk_tier, authorization=result.authorization)
