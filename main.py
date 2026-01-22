@@ -23,11 +23,9 @@ async def verify(request: Request):
         user_key = user_key[7:]
     if user_key != API_MASTER_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
-
     query = body.get("query")
     risk_tier = body.get("risk_tier", "MEDIUM")
     if not query:
         raise HTTPException(status_code=400, detail="Missing 'query' in request body")
-
     result = await verify_query_with_ledger(query=query, risk_tier=risk_tier)
     return result

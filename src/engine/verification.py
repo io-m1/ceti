@@ -1,187 +1,90 @@
-import time
 import hashlib
-from typing import List
-
-from litellm import acompletion
-
-from src.api.schemas import CETIResponse, RefusalDiagnostics, AuthorizationScope
-from src.config.settings import GENERATOR_MODEL, CRITIC_MODEL, JUDGE_MODELS, MAX_ROUNDS_DEFAULT
-from src.engine.guards import is_gaming_attempt
-from src.engine.critics import select_critic_variant
-from src.engine.browse import browse_web
+import time
 from src.ledger.vault import record_verdict
+from litellm import acompletion
+from src.config.settings import GENERATOR_MODEL, CRITIC_MODEL, JUDGE_MODELS, MAX_ROUNDS_DEFAULT
+from src.engine.browse import browse_web
+from src.api.schemas import CETIResponse, RefusalDiagnostics, AuthorizationScope
 
 def extract_content(response):
     if isinstance(response, dict):
         return response["choices"][0]["message"]["content"].strip()
     return response.choices[0].message.content.strip()
 
-async def quorum_vote(answer: str, query: str, risk_tier: str) -> bool:
+async def quorum_vote(final_answer, query, risk_tier):
     accepts = 0
-    for model in JUDGE_MODELS:
-        prompt = f"""
-Query:
-{query}
-
+    for judge_model in JUDGE_MODELS:
+        judge_prompt = f"""
+Evaluate final answer for query '{query}'.
 Answer:
-{answer}
-
-Risk tier:
-{risk_tier}
-
-VERDICT: ACCEPT or REJECT
-"""
+{final_answer}
+Is this flawless for {risk_tier} risk? VERDICT: ACCEPT or REJECT."""
         try:
-            res = await acompletion(
-                model=model,
-                messages=[{"role": "system", "content": prompt}],
-                max_tokens=50
+            judge_response = await acompletion(
+                model=judge_model,
+                messages=[{"role": "system", "content": judge_prompt}],
+                max_tokens=100
             )
-            verdict = extract_content(res)
-            if "ACCEPT" in verdict.upper():
+            if "VERDICT: ACCEPT" in extract_content(judge_response).upper():
                 accepts += 1
         except Exception:
             continue
-    return accepts >= (len(JUDGE_MODELS) * 2 // 3 + 1)
+    required_accepts = len(JUDGE_MODELS) * 2 // 3 + 1
+    return accepts >= required_accepts
 
-async def verify_query(query: str, risk_tier: str = "MEDIUM") -> CETIResponse:
-    transcript: List[str] = []
-
-    gaming, reason = is_gaming_attempt(query)
-    if gaming:
-        return CETIResponse(
-            authorization="DENIED",
-            response_content="Query rejected",
-            scope=None,
-            refusal_diagnostics=RefusalDiagnostics(
-                failure_type="gaming_suspicion",
-                details=reason,
-                requirements_for_certification="Remove meta-instructions or governance manipulation"
-            ),
-            certification_id=None,
-            meta={"query": query}
-        )
-
-    context = browse_web(query)
-    messages = [{"role": "user", "content": f"{context}\n{query}"}]
-
+async def verify_query(query, risk_tier="MEDIUM"):
+    web_context = browse_web(query)
+    gen_messages = [{"role": "user", "content": f"{web_context}\nAnswer: {query}"}]
     try:
-        gen = await acompletion(
-            model=GENERATOR_MODEL,
-            messages=messages,
-            max_tokens=500
-        )
-        answer = extract_content(gen)
+        gen_response = await acompletion(model=GENERATOR_MODEL, messages=gen_messages, max_tokens=500)
+        current_answer = extract_content(gen_response)
     except Exception as e:
         return CETIResponse(
             authorization="DENIED",
-            response_content="Generation failed",
+            response_content="Authorization denied — oracle instability.",
             scope=None,
             refusal_diagnostics=RefusalDiagnostics(
                 failure_type="instability",
                 details=str(e),
-                requirements_for_certification="Retry later"
+                requirements_for_certification="Retry later."
             ),
             certification_id=None,
-            meta={"query": query}
+            meta={"query": query},
         )
-
-    transcript.append(answer)
-    messages.append({"role": "assistant", "content": answer})
-
-    accepted = False
-    rounds = 0
-
-    for i in range(MAX_ROUNDS_DEFAULT):
-        rounds = i + 1
-        critic = select_critic_variant()
-        critique_prompt = f"""
-{critic}
-
-Query:
-{query}
-
+    for round_num in range(1, MAX_ROUNDS_DEFAULT + 1):
+        critic_prompt = f"""
+Check answer for query '{query}'.
 Answer:
-{answer}
-
-VERDICT: ACCEPT or REJECT with full critique
-"""
+{current_answer}
+VERDICT: ACCEPT only if perfect, else REJECT."""
         try:
-            crit = await acompletion(
+            critic_response = await acompletion(
                 model=CRITIC_MODEL,
-                messages=[{"role": "system", "content": critique_prompt}],
+                messages=[{"role": "system", "content": critic_prompt}],
                 max_tokens=400
             )
-            critique = extract_content(crit)
+            critique = extract_content(critic_response)
         except Exception:
-            critique = "REJECT"
-
-        transcript.append(critique)
-
-        if "ACCEPT" in critique.upper():
-            accepted = True
+            critique = "CRITIC FAILURE - REJECT"
+        if "VERDICT: ACCEPT" in critique.upper():
             break
-
-        defense_prompt = f"""
-Critique:
-{critique}
-
-Revise the answer to fully resolve all issues
-"""
-        messages.append({"role": "user", "content": defense_prompt})
-
+        defense_prompt = f"Critique:\n{critique}\nProvide full revised answer."
+        gen_messages.append({"role": "user", "content": defense_prompt})
         try:
-            defense = await acompletion(
-                model=GENERATOR_MODEL,
-                messages=messages,
-                max_tokens=500
-            )
-            answer = extract_content(defense)
+            defense_response = await acompletion(model=GENERATOR_MODEL, messages=gen_messages, max_tokens=500)
+            current_answer = extract_content(defense_response)
         except Exception:
-            break
+            current_answer = "DEFENSE FAILURE - previous answer stands"
+        gen_messages.append({"role": "assistant", "content": current_answer})
+    return CETIResponse(authorization="GRANTED", response_content=current_answer)
 
-        transcript.append(answer)
-        messages.append({"role": "assistant", "content": answer})
-
-    transcript_hash = hashlib.sha256("\n".join(transcript).encode()).hexdigest()
-
-    if accepted and await quorum_vote(answer, query, risk_tier):
-        scope = AuthorizationScope(
-            context_hash=hashlib.sha256(query.encode()).hexdigest(),
-            temporal_bounds=f"valid until {time.strftime('%Y-%m-%d', time.localtime(time.time() + 2592000))}",
-            action_class="informational" if risk_tier in ("LOW", "MEDIUM") else "decision_support",
-            risk_tier_applied=risk_tier
-        )
-        certification_id = record_verdict({
+async def verify_query_with_ledger(query, risk_tier="MEDIUM"):
+    result = await verify_query(query=query, risk_tier=risk_tier)
+    if result.authorization == "GRANTED":
+        ledger_entry = {
             "query": query,
-            "answer": answer,
-            "risk": risk_tier,
-            "transcript_hash": transcript_hash
-        })
-        return CETIResponse(
-            authorization="GRANTED",
-            response_content=answer,
-            scope=scope,
-            refusal_diagnostics=None,
-            certification_id=certification_id,
-            meta={
-                "rounds_completed": rounds,
-                "transcript_hash": transcript_hash
-            }
-        )
-
-    return CETIResponse(
-        authorization="DENIED",
-        response_content="Authorization denied",
-        scope=None,
-        refusal_diagnostics=RefusalDiagnostics(
-            failure_type="instability",
-            details="Consensus not reached",
-            requirements_for_certification="Achieve full critic acceptance and quorum"
-        ),
-        certification_id=None,
-        meta={
-            "rounds_completed": rounds,
-            "transcript_hash": transcript_hash
+            "risk_tier": risk_tier,
+            "certification_id": getattr(result, "certification_id", None),
         }
-    )
+        record_verdict(ledger_entry)
+    return result
